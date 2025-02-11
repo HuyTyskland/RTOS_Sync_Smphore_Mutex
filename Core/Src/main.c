@@ -50,17 +50,17 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 #define DWT_CTRL (*(volatile uint32_t*)0xE0001000)
 
-xTaskHandle manager_task_handle;
-xTaskHandle employee_task_handle;
+xTaskHandle task1_handle;
+xTaskHandle task2_handle;
 
 xSemaphoreHandle bin_smp_handle;
-xQueueHandle queue_handle;
 
-const char* msg_demo_bin = "Demo of Binary Semaphore\n";
-const char* fail_msg = "Demo of Binary Semaphore fails\n";
-const char* fail_mngr_msg = "Manager task: could not send to the queue\n";
-const char* employee_msg = "Employee Task: Working on Ticket ID:";
-const char* fail_employee_msg = "Queue is empty\n";
+const char* task1_msg = "This is task 1 running\n";
+const char* task2_msg = "This is task 2 running\n";
+
+const char* demo_msg = "Demo of Mutual Exclusion by Binary Semaphore\n";
+
+const char* fail_msg = "Semaphore creation fails\n";
 
 /* USER CODE END PV */
 
@@ -69,8 +69,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-static void manager_task_handler(void* parameters);
-static void employee_task_handler(void* parameters);
+static void task1_handler(void* parameters);
+static void task2_handler(void* parameters);
 
 static void printmsg(const char* msg);
 /* USER CODE END PFP */
@@ -113,19 +113,19 @@ int main(void)
   DWT_CTRL |= (1 << 0);
 
   // create binary semaphore
-  printmsg(msg_demo_bin);
+  printmsg(demo_msg);
 
   vSemaphoreCreateBinary(bin_smp_handle);
 
-  queue_handle = xQueueCreate(1, sizeof( unsigned int));
-
-  if((bin_smp_handle != NULL) && (queue_handle != NULL))
+  if(bin_smp_handle != NULL)
   {
-  	status  = xTaskCreate(manager_task_handler, "Manager", 200, "This is manager task", 3, &manager_task_handle);
+  	status  = xTaskCreate(task1_handler, "Task1", 500, "This is task 1", 1, &task1_handle);
 		configASSERT(status == pdPASS);
 
-		status = xTaskCreate(employee_task_handler, "Employee", 200, "This is employee task", 1, &employee_task_handle);
+  	status  = xTaskCreate(task2_handler, "Task2", 500, "This is task 2", 1, &task2_handle);
 		configASSERT(status == pdPASS);
+
+		xSemaphoreGive(bin_smp_handle);
 
 	  vTaskStartScheduler();
   }
@@ -368,56 +368,29 @@ static void printmsg(const char* msg)
 	HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
-static void manager_task_handler(void* parameters)
+static void task1_handler(void* parameters)
 {
-	unsigned int xWorkTicketId;
-	portBASE_TYPE xStatus;
-	char buffer[15];
-
-	xSemaphoreGive(bin_smp_handle);
-
 	while(1)
 	{
-		xWorkTicketId = (rand() & 0x1FF);
-		xStatus = xQueueSend(queue_handle, &xWorkTicketId, portMAX_DELAY);
+		xSemaphoreTake(bin_smp_handle, portMAX_DELAY);
+		printmsg(task1_msg);
 
-		if(xStatus != pdPASS)
-		{
-			printmsg(fail_mngr_msg);
-		}
-		else
-		{
-			xSemaphoreGive(bin_smp_handle);
-			sprintf(buffer, "Manager: work ID: %u\n", xWorkTicketId);
-			printmsg(buffer);
-			taskYIELD();
-		}
+		xSemaphoreGive(bin_smp_handle);
+
+		vTaskDelay(500 / portTICK_RATE_MS);
 	}
 }
 
-static void employee_task_handler(void* parameters)
+static void task2_handler(void* parameters)
 {
-	unsigned char xWorkTicketId;
-	char buffer[10];
-	portBASE_TYPE status;
-
 	while(1)
 	{
-		xSemaphoreTake(bin_smp_handle, 0);
+		xSemaphoreTake(bin_smp_handle, portMAX_DELAY);
+		printmsg(task2_msg);
 
-		status = xQueueReceive(queue_handle, &xWorkTicketId, 0);
+		xSemaphoreGive(bin_smp_handle);
 
-		if(status == pdPASS)
-		{
-			sprintf(buffer, "%u\n", xWorkTicketId);
-			printmsg(employee_msg);
-			printmsg(buffer);
-			vTaskDelay(pdMS_TO_TICKS(200));
-		}
-		else
-		{
-			printmsg(fail_employee_msg);
-		}
+		vTaskDelay(500 / portTICK_RATE_MS);
 	}
 }
 /* USER CODE END 4 */
