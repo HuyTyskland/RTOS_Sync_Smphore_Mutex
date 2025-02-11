@@ -21,7 +21,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
+#include "queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,6 +48,19 @@
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+#define DWT_CTRL (*(volatile uint32_t*)0xE0001000)
+
+xTaskHandle manager_task_handle;
+xTaskHandle employee_task_handle;
+
+xSemaphoreHandle bin_smp_handle;
+xQueueHandle queue_handle;
+
+const char* msg_demo_bin = "Demo of Binary Semaphore\n";
+const char* fail_msg = "Demo of Binary Semaphore fails\n";
+const char* fail_mngr_msg = "Manager task: could not send to the queue\n";
+const char* employee_msg = "Employee Task: Working on Ticket ID:";
+const char* fail_employee_msg = "Queue is empty\n";
 
 /* USER CODE END PV */
 
@@ -50,7 +69,10 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
+static void manager_task_handler(void* parameters);
+static void employee_task_handler(void* parameters);
 
+static void printmsg(const char* msg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -74,7 +96,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  BaseType_t status;
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -88,6 +110,27 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  DWT_CTRL |= (1 << 0);
+
+  // create binary semaphore
+  printmsg(msg_demo_bin);
+
+  vSemaphoreCreateBinary(bin_smp_handle);
+
+  queue_handle = xQueueCreate(1, sizeof( unsigned int));
+
+  if((bin_smp_handle != NULL) && (queue_handle != NULL))
+  {
+  	status  = xTaskCreate(manager_task_handler, "Manager", 200, "This is manager task", 3, &manager_task_handle);
+		configASSERT(status == pdPASS);
+
+		status = xTaskCreate(employee_task_handler, "Employee", 200, "This is employee task", 1, &employee_task_handle);
+		configASSERT(status == pdPASS);
+
+	  vTaskStartScheduler();
+  }
+
+  printmsg(fail_msg);
 
   /* USER CODE END 2 */
 
@@ -320,7 +363,63 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static void printmsg(const char* msg)
+{
+	HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+}
 
+static void manager_task_handler(void* parameters)
+{
+	unsigned int xWorkTicketId;
+	portBASE_TYPE xStatus;
+	char buffer[15];
+
+	xSemaphoreGive(bin_smp_handle);
+
+	while(1)
+	{
+		xWorkTicketId = (rand() & 0x1FF);
+		xStatus = xQueueSend(queue_handle, &xWorkTicketId, portMAX_DELAY);
+
+		if(xStatus != pdPASS)
+		{
+			printmsg(fail_mngr_msg);
+		}
+		else
+		{
+			xSemaphoreGive(bin_smp_handle);
+			sprintf(buffer, "Manager: work ID: %u\n", xWorkTicketId);
+			printmsg(buffer);
+			taskYIELD();
+		}
+	}
+}
+
+static void employee_task_handler(void* parameters)
+{
+	unsigned char xWorkTicketId;
+	char buffer[10];
+	portBASE_TYPE status;
+
+	while(1)
+	{
+		xSemaphoreTake(bin_smp_handle, 0);
+
+		status = xQueueReceive(queue_handle, &xWorkTicketId, 0);
+
+		if(status == pdPASS)
+		{
+			sprintf(buffer, "%u\n", xWorkTicketId);
+			printmsg(employee_msg);
+			printmsg(buffer);
+			vTaskDelay(pdMS_TO_TICKS(200));
+		}
+		else
+		{
+			printmsg(fail_employee_msg);
+		}
+	}
+}
 /* USER CODE END 4 */
 
 /**
